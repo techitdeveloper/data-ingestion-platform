@@ -1,0 +1,1 @@
+DELETE FROM sources WHERE name = 'sample_sales';
