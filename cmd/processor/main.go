@@ -9,8 +9,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/techitdeveloper/data-ingestion-platform/internal/config"
 	"github.com/techitdeveloper/data-ingestion-platform/internal/db"
-	"github.com/techitdeveloper/data-ingestion-platform/internal/downloader"
 	"github.com/techitdeveloper/data-ingestion-platform/internal/health"
+	"github.com/techitdeveloper/data-ingestion-platform/internal/processor"
 	"github.com/techitdeveloper/data-ingestion-platform/internal/queue"
 	"github.com/techitdeveloper/data-ingestion-platform/internal/repository"
 	"github.com/techitdeveloper/data-ingestion-platform/pkg/shutdown"
@@ -27,15 +27,11 @@ func main() {
 		Level(level).
 		With().
 		Timestamp().
-		Str("service", "downloader").
+		Str("service", "processor").
 		Logger()
 
+	// Create root context
 	ctx := context.Background()
-
-	logger.Info().Msg("running migrations")
-	if err := db.RunMigrations(cfg.DBURL, "migrations"); err != nil {
-		logger.Fatal().Err(err).Msg("migrations failed")
-	}
 
 	pool, err := db.NewPool(ctx, cfg.DBURL)
 	if err != nil {
@@ -43,30 +39,48 @@ func main() {
 	}
 	defer pool.Close()
 
-	sourceRepo := repository.NewSourceRepository(pool)
+	// Wire up repositories
 	fileRepo := repository.NewFileRepository(pool)
-	q := queue.NewRedisQueue(cfg.RedisAddr)
+	rateRepo := repository.NewExchangeRateRepository(pool)
+	revenueRepo := repository.NewRevenueRepository(pool)
 
-	d := downloader.New(sourceRepo, fileRepo, q, cfg.DataDirectory, logger)
+	// Build processor
+	proc := processor.New(fileRepo, rateRepo, revenueRepo, logger)
+
+	// Build queue and worker pool
+	q := queue.NewRedisQueue(cfg.RedisAddr)
+	workerPool := processor.NewWorkerPool(proc, q, fileRepo, cfg.WorkerCount, logger)
+
+	// Build reconciler
+	reconciler := processor.NewReconciler(fileRepo, q, logger)
 
 	// Start health check server
 	redisClient := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
-	healthServer := health.NewServer(":8081", pool, redisClient, logger)
+	healthServer := health.NewServer(":8080", pool, redisClient, logger)
 	healthServer.Start()
 
-	logger.Info().Msg("downloader starting")
+	logger.Info().
+		Int("workers", cfg.WorkerCount).
+		Msg("processor starting")
 
-	go d.Run(ctx)
+	// Start worker pool and reconciler in goroutines
+	go workerPool.Run(ctx)
+	go reconciler.Run(ctx)
 
+	// Wait for shutdown signal
 	shutdownMgr := shutdown.NewManager(logger, 30*time.Second)
 	shutdownCtx := shutdownMgr.WaitForShutdown(ctx)
 
+	// Graceful shutdown
 	logger.Info().Msg("initiating graceful shutdown")
+
+	// Give in-flight work time to finish
 	<-shutdownCtx.Done()
 
+	// Shutdown health server
 	if err := healthServer.Shutdown(context.Background()); err != nil {
 		logger.Error().Err(err).Msg("health server shutdown error")
 	}
 
-	logger.Info().Msg("downloader exited cleanly")
+	logger.Info().Msg("processor exited cleanly")
 }
