@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/techitdeveloper/data-ingestion-platform/internal/queue"
 	"github.com/techitdeveloper/data-ingestion-platform/internal/repository"
+	"github.com/techitdeveloper/data-ingestion-platform/pkg/trace"
 )
 
 // WorkerPool manages N goroutines that each consume jobs from Redis
@@ -123,6 +124,8 @@ func (wp *WorkerPool) runWorker(ctx context.Context, workerID int, jobChan <-cha
 	// range over channel — this loop exits automatically when
 	// consumeJobs closes jobChan. Clean and idiomatic.
 	for job := range jobChan {
+		jobCtx := trace.WithRequestID(ctx)
+		requestID := trace.GetRequestID(jobCtx)
 		log.Info().
 			Str("file_id", job.FileID).
 			Msg("worker picked up job")
@@ -131,6 +134,7 @@ func (wp *WorkerPool) runWorker(ctx context.Context, workerID int, jobChan <-cha
 			log.Error().
 				Err(err).
 				Str("file_id", job.FileID).
+				Str("request_id", requestID).
 				Msg("job processing failed")
 			// Job stays as "failed" in DB — reconciler or manual retry handles it
 		}

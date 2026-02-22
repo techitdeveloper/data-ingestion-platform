@@ -25,4 +25,8 @@ type FileRepository interface {
 
 	// UpdateFileStatus changes the status column of a file record.
 	UpdateFileStatus(ctx context.Context, fileID uuid.UUID, status models.FileStatus) error
+
+	// GetStuckFiles returns files that have been in "processing" status
+	// for longer than the threshold duration.
+	GetStuckFiles(ctx context.Context, threshold time.Duration) ([]models.File, error)
 }

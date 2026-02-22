@@ -13,6 +13,7 @@ import (
 	"github.com/techitdeveloper/data-ingestion-platform/internal/models"
 	"github.com/techitdeveloper/data-ingestion-platform/internal/repository"
 	csvparser "github.com/techitdeveloper/data-ingestion-platform/pkg/csv"
+	"github.com/techitdeveloper/data-ingestion-platform/pkg/trace"
 )
 
 const (
@@ -67,9 +68,12 @@ func (p *Processor) Process(ctx context.Context, job Job) error {
 		return fmt.Errorf("invalid source_id: %w", err)
 	}
 
+	requestID := trace.GetRequestID(ctx)
+
 	log := p.logger.With().
 		Str("file_id", job.FileID).
 		Str("source_id", job.SourceID).
+		Str("request_id", requestID).
 		Logger()
 
 	log.Info().Msg("processing started")

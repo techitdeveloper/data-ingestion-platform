@@ -89,3 +89,43 @@ func (r *pgxFileRepo) UpdateFileStatus(
 	}
 	return nil
 }
+
+func (r *pgxFileRepo) GetStuckFiles(ctx context.Context, threshold time.Duration) ([]models.File, error) {
+	// Calculate the cutoff time — files updated before this are stuck
+	cutoff := time.Now().Add(-threshold)
+
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, source_id, file_date, local_path, status, checksum, created_at
+		FROM files
+		WHERE status = $1
+		  AND created_at < $2
+		ORDER BY created_at ASC
+	`, models.FileStatusProcessing, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("querying stuck files: %w", err)
+	}
+	defer rows.Close()
+
+	var files []models.File
+	for rows.Next() {
+		var f models.File
+		if err := rows.Scan(
+			&f.ID,
+			&f.SourceID,
+			&f.FileDate,
+			&f.LocalPath,
+			&f.Status,
+			&f.Checksum,
+			&f.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning stuck file: %w", err)
+		}
+		files = append(files, f)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating stuck files: %w", err)
+	}
+
+	return files, nil
+}
